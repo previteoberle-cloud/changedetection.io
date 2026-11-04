@@ -61,6 +61,22 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python -m techsignal.live --python "$(which python)" --case cases/tenstorrent_blackhole/case_cross_batch.json --out ../live-case-output --log ../live-case-cdio.log
+      - name: Print the verification trace summary (so it is readable in the job log)
+        if: always()
+        run: |
+          python - <<'PY'
+          import json, pathlib
+          for p in sorted(pathlib.Path("live-case-output").glob("batch*/verification_trace.json")):
+              t = json.loads(p.read_text(encoding="utf-8"))
+              print(f"== {p}")
+              for c in t["calls"]:
+                  print(c["call_id"], c["tool"], c["status"], c["http_status"], c["url"], c["error"] or "", c["evidence_created"])
+                  for f in c["findings"][:4]:
+                      print("    ", f["locator"], " / ".join(x[:160] for x in f["lines"]))
+              for s in t["summaries"]:
+                  print("SUMMARY", s["outcome"], s["stop_reason"], s["hints"])
+                  print("CONCLUSION", s["conclusion"])
+          PY
       - uses: actions/upload-artifact@v4
         if: always()
         with:
