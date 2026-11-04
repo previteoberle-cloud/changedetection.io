@@ -1,0 +1,36 @@
+name: TechSignal (independent module)
+
+# Only the techsignal/ module. Does not touch or depend on changedetection.io's own test stack.
+on:
+  push:
+    paths: ["techsignal/**", "changedetectionio/changes_report.py", ".github/workflows/techsignal.yml"]
+  pull_request:
+    paths: ["techsignal/**", "changedetectionio/changes_report.py", ".github/workflows/techsignal.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.13"]
+    defaults:
+      run:
+        working-directory: techsignal
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install (pydantic + pytest only)
+        run: pip install -e ".[test]"
+      - name: Unit, scenario and end-to-end tests
+        run: python -m pytest -v
+      - name: Fixtures still equal upstream changes_report output
+        run: python -m techsignal.fixtures --check
+      - name: Scenario metrics
+        run: python -m techsignal eval
