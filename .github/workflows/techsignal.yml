@@ -36,6 +36,32 @@ jobs:
       - name: Scenario metrics
         run: python -m techsignal eval
 
+  ui:
+    # R4 research workbench: data layer + the Streamlit script driven by streamlit.testing, then a real
+    # server start-up check. No network, no Docker, no model key needed.
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: techsignal
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install TechSignal with the workbench extra
+        run: pip install -e ".[test,ui]"
+      - name: Workbench tests
+        run: python -m pytest -v tests/ui
+      - name: Start the workbench and check it answers
+        run: |
+          python -m techsignal.workbench --server.port 8599 > /tmp/workbench.log 2>&1 &
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:8599/_stcore/health && break; sleep 1; done
+          curl -sf http://127.0.0.1:8599/_stcore/health
+          curl -sf http://127.0.0.1:8599/ | grep -q "<title>"
+          kill %1 || true
+
   live-cdio:
     # Online integration: a real changedetection.io started from this checkout, real public sources.
     runs-on: ubuntu-latest
