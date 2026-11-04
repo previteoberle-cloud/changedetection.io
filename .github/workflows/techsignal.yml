@@ -1,0 +1,136 @@
+name: TechSignal (independent module)
+
+# TechSignal only. `test`: the module alone (pydantic + pytest). `live-cdio`: a real changedetection.io
+# started from this checkout plus real public sources. Neither touches changedetection.io's own test stack.
+on:
+  push:
+    paths: ["techsignal/**", "changedetectionio/**", "requirements.txt", ".github/workflows/techsignal.yml"]
+  pull_request:
+    paths: ["techsignal/**", "changedetectionio/**", "requirements.txt", ".github/workflows/techsignal.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.13"]
+    defaults:
+      run:
+        working-directory: techsignal
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install (pydantic + pytest only)
+        run: pip install -e ".[test]"
+      - name: Unit, scenario and end-to-end tests
+        run: python -m pytest -v
+      - name: Fixtures still equal upstream changes_report output
+        run: python -m techsignal.fixtures --check
+      - name: Scenario metrics
+        run: python -m techsignal eval
+
+  standalone-layout:
+    # R5: techsignal/ copied on its own (no changedetection.io next to it), exactly as the extracted
+    # standalone repository sees itself. Upstream-dependent tests must skip, everything else must pass.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Copy techsignal/ into an empty directory
+        run: cp -r techsignal /tmp/TechSignal
+      - name: Install and test there
+        working-directory: /tmp/TechSignal
+        run: |
+          pip install -e ".[test,ui]"
+          python -c "from techsignal import upstream; assert upstream.cdio_source() is None"
+          python -m pytest -v
+          python -m techsignal eval
+          python -m techsignal.workbench --server.port 8599 > /tmp/wb.log 2>&1 &
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:8599/_stcore/health && break; sleep 1; done
+          curl -sf http://127.0.0.1:8599/_stcore/health
+
+  ui:
+    # R4 research workbench: data layer + the Streamlit script driven by streamlit.testing, then a real
+    # server start-up check. No network, no Docker, no model key needed.
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: techsignal
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install TechSignal with the workbench extra
+        run: pip install -e ".[test,ui]"
+      - name: Workbench tests
+        run: python -m pytest -v tests/ui
+      - name: Start the workbench and check it answers
+        run: |
+          python -m techsignal.workbench --server.port 8599 > /tmp/workbench.log 2>&1 &
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:8599/_stcore/health && break; sleep 1; done
+          curl -sf http://127.0.0.1:8599/_stcore/health
+          curl -sf http://127.0.0.1:8599/ | grep -q "<title>"
+          kill %1 || true
+
+  live-cdio:
+    # Online integration: a real changedetection.io started from this checkout, real public sources.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install changedetection.io requirements and TechSignal
+        run: |
+          pip install -r requirements.txt
+          pip install -e "./techsignal[test]"
+      - name: Online integration tests (real changedetection.io, real GitHub-hosted sources)
+        working-directory: techsignal
+        env:
+          # The workflow's own token, only to read public commit metadata from api.github.com (R3 tools)
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: TECHSIGNAL_CDIO_PYTHON="$(which python)" TECHSIGNAL_LIVE_NETWORK=1 python -m pytest -v tests/integration
+      - name: Re-run the public research case live and keep its outputs
+        working-directory: techsignal
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python -m techsignal.live --python "$(which python)" --case cases/tenstorrent_blackhole/case_cross_batch.json --out ../live-case-output --log ../live-case-cdio.log
+      - name: Print the verification trace summary (so it is readable in the job log)
+        if: always()
+        run: |
+          python - <<'PY'
+          import json, pathlib
+          for p in sorted(pathlib.Path("live-case-output").glob("batch*/verification_trace.json")):
+              t = json.loads(p.read_text(encoding="utf-8"))
+              print(f"== {p}")
+              for c in t["calls"]:
+                  print(c["call_id"], c["tool"], c["status"], c["http_status"], c["url"], c["error"] or "", c["evidence_created"])
+                  for f in c["findings"][:4]:
+                      print("    ", f["locator"], " / ".join(x[:160] for x in f["lines"]))
+              for s in t["summaries"]:
+                  print("SUMMARY", s["outcome"], s["stop_reason"], s["hints"])
+                  print("CONCLUSION", s["conclusion"])
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: techsignal-live-case
+          path: |
+            live-case-output/
+            live-case-cdio.log
