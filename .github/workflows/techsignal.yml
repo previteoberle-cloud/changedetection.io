@@ -36,6 +36,30 @@ jobs:
       - name: Scenario metrics
         run: python -m techsignal eval
 
+  standalone-layout:
+    # R5: techsignal/ copied on its own (no changedetection.io next to it), exactly as the extracted
+    # standalone repository sees itself. Upstream-dependent tests must skip, everything else must pass.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Copy techsignal/ into an empty directory
+        run: cp -r techsignal /tmp/TechSignal
+      - name: Install and test there
+        working-directory: /tmp/TechSignal
+        run: |
+          pip install -e ".[test,ui]"
+          python -c "from techsignal import upstream; assert upstream.cdio_source() is None"
+          python -m pytest -v
+          python -m techsignal eval
+          python -m techsignal.workbench --server.port 8599 > /tmp/wb.log 2>&1 &
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:8599/_stcore/health && break; sleep 1; done
+          curl -sf http://127.0.0.1:8599/_stcore/health
+
   ui:
     # R4 research workbench: data layer + the Streamlit script driven by streamlit.testing, then a real
     # server start-up check. No network, no Docker, no model key needed.
