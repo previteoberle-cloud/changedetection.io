@@ -52,10 +52,15 @@ jobs:
           pip install -e "./techsignal[test]"
       - name: Online integration tests (real changedetection.io, real GitHub-hosted sources)
         working-directory: techsignal
+        env:
+          # The workflow's own token, only to read public commit metadata from api.github.com (R3 tools)
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: TECHSIGNAL_CDIO_PYTHON="$(which python)" TECHSIGNAL_LIVE_NETWORK=1 python -m pytest -v tests/integration
       - name: Re-run the public research case live and keep its outputs
         working-directory: techsignal
-        run: python -m techsignal.live --python "$(which python)" --case cases/tenstorrent_blackhole/case.json --out ../live-case-output --log ../live-case-cdio.log
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python -m techsignal.live --python "$(which python)" --case cases/tenstorrent_blackhole/case_cross_batch.json --out ../live-case-output --log ../live-case-cdio.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:
